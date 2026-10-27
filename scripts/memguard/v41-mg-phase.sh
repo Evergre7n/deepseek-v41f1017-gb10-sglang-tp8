@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # v41-apikey-20260913: :8001 已启用 --api-key ⇒ curl 自动带 Bearer（自身不设 Authorization 的脚本才需要）
-V41_API_KEY_VALUE="$(cat "${V41_API_KEY_FILE:-/home/cq/.v41-apikey}" 2>/dev/null || true)"
+V41_API_KEY_VALUE="$(cat "${V41_API_KEY_FILE:-/home/deploy/.v41-apikey}" 2>/dev/null || true)"
 if [ -n "$V41_API_KEY_VALUE" ]; then
   curl() { command curl -H "Authorization: Bearer $V41_API_KEY_VALUE" "$@"; }
 fi
@@ -8,7 +8,7 @@ fi
 #
 # 加载期：四台挂 v41-mg-load.sh（杀 = avail<1024  OR  (avail<16384 AND PSI_full>50)）
 # 现役终态留 load（2026-09-13 拍板）：start **不**自动切稳态。
-#   稳态 psi>5 单腿会误杀（spark-03 当日 00:17 PSI 8.87 / 21:37 PSI 16.09，avail 仍 7–11 GB）。
+#   稳态 psi>5 单腿会误杀（node-03 当日 00:17 PSI 8.87 / 21:37 PSI 16.09，avail 仍 7–11 GB）。
 #   switch 默认拒绝（须 V41_MG_ALLOW_STEADY=1）；V41_MG_AUTO_STEADY=1 仍非默认。
 #   四台 memguard.sh v4 已废 PSI 单腿，与 load 同判据；误挂稳态也不会再走 21:37 那条腿。
 # 绝对下限 1024 两相位相同，不得放宽。
@@ -42,8 +42,8 @@ fi
 #   v41-mg-phase.sh status
 set -uo pipefail
 
-NODES_IP=(10.100.24.4 10.100.24.3 10.100.24.1 10.100.24.2)
-HEAD_IP=10.100.24.4
+NODES_IP=(10.99.0.4 10.99.0.3 10.99.0.1 10.99.0.2)
+HEAD_IP=10.99.0.4
 NAME="${V41_NAME:-vllm_dsv41}"
 ABS_MB="${V41_MG_MB:-1024}"
 INTERVAL="${V41_MG_INTERVAL:-2}"
@@ -52,7 +52,7 @@ PSI_HARD_ABS="${V41_MG_PSI_HARD_ABS:-16384}"
 STEADY_PSI_FULL="${V41_MG_PSI_FULL:-5.0}"
 STEADY_PSI_SOME="${V41_MG_PSI_SOME:-60.0}"
 QUIET_HOLD_SEC="${V41_MG_QUIET_SEC:-300}"
-PHASEFILE="/home/cq/logs/v41-mg-phase.state"
+PHASEFILE="/home/deploy/logs/v41-mg-phase.state"
 
 # S3-1：绝对下限硬钳制
 case "${ABS_MB:-}" in
@@ -62,14 +62,14 @@ if [ "$ABS_MB" -lt 1024 ]; then echo "!! ABS_MB=$ABS_MB < 1024，强制抬回 10
 
 run_on() {  # run_on <ip> <cmd...>
   local ip="$1"; shift
-  if [ "$ip" = "$HEAD_IP" ]; then bash -c "$*"; else ssh -n -o BatchMode=yes -o ConnectTimeout=10 "cq@$ip" "$*"; fi
+  if [ "$ip" = "$HEAD_IP" ]; then bash -c "$*"; else ssh -n -o BatchMode=yes -o ConnectTimeout=10 "deploy@$ip" "$*"; fi
 }
 
 start_load_sentinels() {
   echo "=== 起加载期哨兵（四台；先停稳态+加载期，保证互斥）"
   local rc=0 out
   for ip in "${NODES_IP[@]}"; do
-    out=$(run_on "$ip" "/home/cq/memguard.sh stop $NAME >/dev/null 2>&1 || true; /home/cq/v41-mg-load.sh stop $NAME >/dev/null 2>&1 || true; /home/cq/v41-mg-load.sh start $NAME $ABS_MB $INTERVAL $PSI_HARD $PSI_HARD_ABS 2>&1")
+    out=$(run_on "$ip" "/home/deploy/memguard.sh stop $NAME >/dev/null 2>&1 || true; /home/deploy/v41-mg-load.sh stop $NAME >/dev/null 2>&1 || true; /home/deploy/v41-mg-load.sh start $NAME $ABS_MB $INTERVAL $PSI_HARD $PSI_HARD_ABS 2>&1")
     printf '%s\n' "$out" | sed "s|^|  $ip |"
     if printf '%s' "$out" | grep -Eq "已启动 pid=[0-9]+"; then :; else
       echo "  !! $ip 加载期哨兵启动失败" >&2; rc=1
@@ -82,7 +82,7 @@ verify_load() {
   local rc=0 n
   echo "=== 校验四台加载期哨兵在岗"
   for ip in "${NODES_IP[@]}"; do
-    n=$(run_on "$ip" "/home/cq/v41-mg-load.sh status $NAME 2>/dev/null | head -1")
+    n=$(run_on "$ip" "/home/deploy/v41-mg-load.sh status $NAME 2>/dev/null | head -1")
     echo "  $ip  $n"
     case "$n" in *运行中*) : ;; *) rc=1 ;; esac
   done
@@ -100,9 +100,9 @@ switch_to_steady() {
   echo "=== 切换稳态判据（绝对下限 ${ABS_MB}MB；memguard v4 与 load 同合取，不再用 PSI ${STEADY_PSI_FULL} 单腿）"
   local rc=0 out n
   for ip in "${NODES_IP[@]}"; do
-    out=$(run_on "$ip" "/home/cq/v41-mg-load.sh stop $NAME >/dev/null 2>&1 || true; /home/cq/memguard.sh start $NAME $ABS_MB $INTERVAL $STEADY_PSI_FULL $STEADY_PSI_SOME 2>&1")
+    out=$(run_on "$ip" "/home/deploy/v41-mg-load.sh stop $NAME >/dev/null 2>&1 || true; /home/deploy/memguard.sh start $NAME $ABS_MB $INTERVAL $STEADY_PSI_FULL $STEADY_PSI_SOME 2>&1")
     printf '%s\n' "$out" | sed "s|^|  $ip |"
-    n=$(run_on "$ip" "/home/cq/memguard.sh status $NAME 2>/dev/null | head -1")
+    n=$(run_on "$ip" "/home/deploy/memguard.sh status $NAME 2>/dev/null | head -1")
     case "$n" in
       *运行中*) : ;;
       *) echo "  !! $ip 稳态哨兵未在岗：$n" >&2; rc=1 ;;
@@ -170,7 +170,7 @@ wait_quiet() {
 }
 
 wait_ready_then_switch() {
-  local log=/home/cq/logs/v41-mg-phase-wait.log
+  local log=/home/deploy/logs/v41-mg-phase-wait.log
   echo "[$(date '+%F %T')] 等待 http://$HEAD_IP:8001/v1/models 就绪（容器创建宽限 30 轮=10min）……" >> "$log"
   local i absent=0 seen=0 n rc present unknown
   for i in $(seq 1 2160); do   # 2160 * 20s = 12h 上限
@@ -221,7 +221,7 @@ case "${1:-status}" in
       case "${V41_MG_AUTO_STEADY:-0}" in
         1|yes|true|TRUE)
           echo "=== V41_MG_AUTO_STEADY=1：挂后台，就绪+静默后仍须 V41_MG_ALLOW_STEADY=1 才会切（非现役默认）"
-          setsid nohup "$0" __wait >> /home/cq/logs/v41-mg-phase-wait.log 2>&1 < /dev/null &
+          setsid nohup "$0" __wait >> /home/deploy/logs/v41-mg-phase-wait.log 2>&1 < /dev/null &
           sleep 1
           echo "  等待 job pid=$!"
           ;;
@@ -245,7 +245,7 @@ case "${1:-status}" in
     echo "=== 阶段：$(cat "$PHASEFILE" 2>/dev/null || echo '未知')"
     for ip in "${NODES_IP[@]}"; do
       echo "--- $ip"
-      run_on "$ip" "echo -n 'load: '; /home/cq/v41-mg-load.sh status $NAME | head -1; echo -n 'steady: '; /home/cq/memguard.sh status $NAME | head -1" 2>&1 | sed 's|^|  |'
+      run_on "$ip" "echo -n 'load: '; /home/deploy/v41-mg-load.sh status $NAME | head -1; echo -n 'steady: '; /home/deploy/memguard.sh status $NAME | head -1" 2>&1 | sed 's|^|  |'
     done
     ;;
   *)

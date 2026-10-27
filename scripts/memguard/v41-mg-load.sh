@@ -23,7 +23,7 @@
 #   v41-mg-load.sh status <容器名>
 #
 # 退出码：0 成功 / 2 参数非法 / 3 **哨兵未能拉起（调用方必须据此拒绝起服）**
-# 日志：/home/cq/logs/memguard-load-<容器名>.log
+# 日志：/home/deploy/logs/memguard-load-<容器名>.log
 set -uo pipefail
 
 ACTION="${1:-status}"
@@ -34,14 +34,14 @@ if [ "$ACTION" = "__watch" ]; then
   INTERVAL="${_ML_INTERVAL:-2}"
   PSI_HARD="${_ML_PSI_HARD:-50.0}"
   PSI_HARD_ABS="${_ML_PSI_HARD_ABS:-16384}"
-  LOG="${_ML_LOG:-/home/cq/logs/memguard-load-${NAME}.log}"
+  LOG="${_ML_LOG:-/home/deploy/logs/memguard-load-${NAME}.log}"
 else
   NAME="${2:-}"
   ABS_MB="${3:-8192}"
   INTERVAL="${4:-2}"
   PSI_HARD="${5:-50.0}"
   PSI_HARD_ABS="${6:-16384}"
-  LOG="/home/cq/logs/memguard-load-${NAME}.log"
+  LOG="/home/deploy/logs/memguard-load-${NAME}.log"
 fi
 
 # ---- S3-1：绝对下限硬钳制（不得放宽 1024）----------------------------------
@@ -53,8 +53,8 @@ if [ "$ABS_MB" -lt 1024 ]; then
   ABS_MB=1024
 fi
 
-PIDFILE="/home/cq/logs/memguard-load-${NAME}.pid"
-LOGDIR="/home/cq/logs"
+PIDFILE="/home/deploy/logs/memguard-load-${NAME}.pid"
+LOGDIR="/home/deploy/logs"
 mkdir -p "$LOGDIR"
 
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
@@ -66,9 +66,9 @@ read_psi_full() {
 }
 
 # ---- S2-4：跨四台协调清场（避免 head 死/worker 活半死态）---------------------
-# 设计：先本机保底 kill（绝不因协调器不可用而延后），再尽力调用 /home/cq/v41-kill-all.sh
+# 设计：先本机保底 kill（绝不因协调器不可用而延后），再尽力调用 /home/deploy/v41-kill-all.sh
 #       把四台一起清掉。协调器带 flock，重复触发幂等。
-COORD="/home/cq/v41-kill-all.sh"
+COORD="/home/deploy/v41-kill-all.sh"
 self_is_head() { ip -4 -o addr show 2>/dev/null | grep -q '10\.100\.24\.4'; }
 
 kill_container() {
@@ -80,7 +80,7 @@ kill_container() {
       timeout 40 bash "$COORD" "$NAME" >>"$LOG" 2>&1 && log "四台清场完成" \
         || log "!! 四台清场失败（已按本机保底；可能残留半死态）"
     else
-      timeout 40 ssh -n -o BatchMode=yes -o ConnectTimeout=5 cq@10.100.24.4 "bash $COORD $NAME" >>"$LOG" 2>&1 \
+      timeout 40 ssh -n -o BatchMode=yes -o ConnectTimeout=5 deploy@10.99.0.4 "bash $COORD $NAME" >>"$LOG" 2>&1 \
         && log "四台清场完成" || log "!! 四台清场 ssh 失败（已按本机保底；可能残留半死态）"
     fi
   fi

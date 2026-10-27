@@ -6,11 +6,11 @@ DGX Spark 是统一内存。推理把页推满时会出现 **wedge**：ping 通�
 
 ## 安装
 
-把本目录四个脚本拷到每台 `/home/cq/`（文件名保持 `memguard.sh`、`v41-mg-phase.sh`、`v41-mg-load.sh`、`v41-kill-all.sh`）。起服前：
+把本目录四个脚本拷到每台 `/home/deploy/`（文件名保持 `memguard.sh`、`v41-mg-phase.sh`、`v41-mg-load.sh`、`v41-kill-all.sh`）。起服前：
 
 ```bash
-/home/cq/v41-mg-phase.sh start
-/home/cq/v41-mg-phase.sh status
+/home/deploy/v41-mg-phase.sh start
+/home/deploy/v41-mg-phase.sh status
 ```
 
 相位终态留 **load**。`switch` 到 steady 默认拒绝（须显式环境变量，见脚本）。

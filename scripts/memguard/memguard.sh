@@ -10,7 +10,7 @@
 # PSI 的 full avg10 是「所有任务都被内存卡住」的占比，thrash 一发生就抬头。
 # v3（2026-09-12 内存安全链修复）：启动失败必须回非零（不再谎报"已启动"）、
 #   强制钳制 1024 MB 绝对下限、触发时协调四台清场、日志不再清空丢证据。
-# v4（2026-09-13）：废除 PSI 单腿。spark-03 稳态 psi>5 在 avail 仍 7–11 GB 时
+# v4（2026-09-13）：废除 PSI 单腿。node-03 稳态 psi>5 在 avail 仍 7–11 GB 时
 #   两次清场（00:17 PSI 8.87 / 21:37 PSI 16.09）。现役杀判据与加载期对齐：
 #   avail < THRESH(>=1024)  OR  (avail < 16384 AND psi_full > 50)。
 #   位置参数 PSI_full / PSI_some 不再单独开火（保留只为兼容旧调用）。
@@ -26,7 +26,7 @@ set -uo pipefail
 ACTION="${1:-status}"
 
 if [ "$ACTION" = "__watch" ]; then
-  LOG="${_MG_LOG:-/home/cq/logs/memguard.log}"
+  LOG="${_MG_LOG:-/home/deploy/logs/memguard.log}"
   NAME="${_MG_NAME:-}"
   THRESH_MB="${_MG_THRESH:-8192}"
   INTERVAL="${_MG_INTERVAL:-1}"
@@ -56,8 +56,8 @@ case "${PSI_AND_ABS:-}" in
   ''|*[!0-9]*) PSI_AND_ABS=16384 ;;
 esac
 
-PIDFILE="/home/cq/logs/memguard-${NAME}.pid"
-LOGDIR="/home/cq/logs"
+PIDFILE="/home/deploy/logs/memguard-${NAME}.pid"
+LOGDIR="/home/deploy/logs"
 LOG="${_MG_LOG:-$LOGDIR/memguard.log}"
 
 mkdir -p "$LOGDIR"
@@ -78,7 +78,7 @@ read_psi_some() {
 }
 
 # ---- S2-4：跨四台协调清场（避免 head 死/worker 活半死态）---------------------
-COORD="/home/cq/v41-kill-all.sh"
+COORD="/home/deploy/v41-kill-all.sh"
 self_is_head() { ip -4 -o addr show 2>/dev/null | grep -q '10\.100\.24\.4'; }
 
 kill_container() {
@@ -89,7 +89,7 @@ kill_container() {
       timeout 40 bash "$COORD" "$NAME" >>"$LOG" 2>&1 && log "四台清场完成" \
         || log "!! 四台清场失败（已按本机保底；可能残留半死态）"
     else
-      timeout 40 ssh -n -o BatchMode=yes -o ConnectTimeout=5 cq@10.100.24.4 "bash $COORD $NAME" >>"$LOG" 2>&1 \
+      timeout 40 ssh -n -o BatchMode=yes -o ConnectTimeout=5 deploy@10.99.0.4 "bash $COORD $NAME" >>"$LOG" 2>&1 \
         && log "四台清场完成" || log "!! 四台清场 ssh 失败（已按本机保底；可能残留半死态）"
     fi
   fi

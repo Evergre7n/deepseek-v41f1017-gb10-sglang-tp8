@@ -1,0 +1,35 @@
+# 示例：管理机到八台的 SSH 别名（起服链经它连 head，head 再到各台 RoCE IP）
+# HostName 换成你的实际地址；node-01 建议指向 head 的固定管理地址。
+# 用户名 deploy 为示例。
+Host node-01
+  HostName <node1-mgmt>
+  User deploy
+  IdentityFile ~/.ssh/your_key
+Host node-02
+  HostName <node2-mgmt>
+  User deploy
+  IdentityFile ~/.ssh/your_key
+Host node-03
+  HostName <node3-mgmt>
+  User deploy
+  IdentityFile ~/.ssh/your_key
+Host node-04
+  HostName <node4-mgmt>
+  User deploy
+  IdentityFile ~/.ssh/your_key
+Host node-05
+  HostName <node5-mgmt>
+  User deploy
+  IdentityFile ~/.ssh/your_key
+Host node-06
+  HostName <node6-mgmt>
+  User deploy
+  IdentityFile ~/.ssh/your_key
+Host node-07
+  HostName <node7-mgmt>
+  User deploy
+  IdentityFile ~/.ssh/your_key
+Host node-08
+  HostName <node8-mgmt>
+  User deploy
+  IdentityFile ~/.ssh/your_key

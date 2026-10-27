@@ -1,127 +1,48 @@
-# DGX Spark ×4 · DeepSeek-V4.1-Flash · knapcio v2.2（SGLang TP4）
+# DGX Spark + 超聚变 GB10 ×8 · DeepSeek-V4.1-Flash-1017 · SGLang TP8
 
-在 **4 台 NVIDIA DGX Spark（GB10）** 上，用 [knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4) **v2.2**（提交 `e9ec61d2`）起 **SGLang TP4 / EP1**，跑 DeepSeek-V4.1-Flash。
+在 **8 台 NVIDIA GB10 机器**（4×DGX Spark + 4×超聚变 GB10）上，用 SGLang **TP8 / EP8** 跑 **DeepSeek-V4.1-Flash-1017**：上下文窗口 **1,000,000**、最大输出 **100,000**、并发 **8**、KV 池 **8,000,256** token。
 
-本仓库是 **0 到 1 的部署手册 + 本机补丁 + 内存哨兵**，不是上游启动器的复刻。启动器、镜像构建、RoCE / Engram / MoE 默认值都以 knapcio 仓库为准。
+本仓库是 **0 到 1 的部署手册 + 固定起服链 + 内存哨兵**，不是上游启动器的复刻。引擎底座沿用 [knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4) 的镜像构建思路（v2.2 起），在 8 机 TP8 形态下自建镜像与起服链。
 
-> **2026-09-29**：公开库从 2026-09-14 的 **vLLM 第一方配方**整包换成现役 **knapcio v2.2**。旧 `scripts/v41-tuned-tp4.sh` 与 `patch/`（Tony 七补丁）已从默认路径删除，历史提交里还能看到。
+> **2026-10-27**：本仓库从 **TP4 四机方案整包换为现役 TP8 八机方案**。TP4 时代的 13 篇文档与 TP4 专用脚本已删除（git 历史可查）。内存哨兵 `scripts/memguard/` 仍是现役组件，原样保留。
 
 ---
 
-## 现役数字（本机 2026-09-29 起服日志，A 级）
+## 现役数字（2026-10-25 起服日志，A 级实测）
 
 | 项 | 值 |
 |---|---|
-| 入口 | `http://<head-mgmt>:8001/v1`（脚本只用 RoCE `HEAD_IP`） |
-| 模型名 | `deepseek-v4.1-flash` |
-| 上游代码 | knapcio `e9ec61d2`（v2.2，2026-09-25） |
-| 基础镜像 | `lmsysorg/sglang:dev-dsv41`（本机构建未再拉；记录 digest `381b27ff`） |
-| 本机构建 tag | `dsv41-4x-spark:v22-roce-sw1` |
-| 引擎总长 | `CONTEXT_LENGTH=600000`（客户端常见拆法：prompt 500000 + 输出 100000） |
-| 默认输出帽 | `DSV41_MAX_NEW_TOKENS=100000` |
-| 并发 | `MAX_RUNNING_REQUESTS=4`（CUDA graph decode bs 1–4） |
-| KV 钉值 | `MAX_TOTAL_TOKENS=2500000`；`MEM_FRACTION_STATIC=0.80` 会按起服时内存再封顶。本机两靴实测池 **2,149,120–2,502,144** |
-| 切块 | 上游默认 `CHUNKED_PREFILL_SIZE=4096` |
-| Engram 缓存 | 上游默认 `DSV41_CACHE_GIB=4` |
-| 必须加的启动项 | `--image-processor-backend pil`；`--prefill-decode-interval 1` |
-| 本机补丁 | 第二路切块串行 + SSE keepalive（`scripts/suwen_fixes.py`） |
+| 服务入口 | `http://<head-mgmt>:8888/v1` |
+| 模型名 | `deepseek-v4.1-flash-1017-unc` |
+| 引擎 | SGLang（自建镜像 `dsv41-4x-spark:canary-roce-z2`） |
+| 上下文 / 输出 / 并发 | `CONTEXT_LENGTH=1000000` / `DSV41_MAX_NEW_TOKENS=100000` / `MAX_RUNNING_REQUESTS=8` |
+| KV 池 | `MAX_TOTAL_TOKENS=8000256`（8 个满窗会话） |
+| 冷 prefill（实测中位） | 131k：6,542 tok/s · 262k：6,511 · 524k：5,834 |
+| 代码补全 C1 | 203 tok/s（512 上下文口径） |
+| 长会话解码 | 73 万 token 上下文下 119 tok/s |
+| 锁频 | 八台 GPU 全核 2200 MHz（`gb10-clock-cap` 服务） |
+| 起服耗时 | 约 9 分钟到 BOOT_READY，15 分钟含暖机 |
 
-满池写入量（C）：`2502144 × 1670.75 B ≈ 4.18 GB/台`。KV 按写入占宿主页、用过不还，**不要拿刚起服的 `MemAvailable` 当长期余量**。
+## 目录
 
----
-
-## 配方从哪来
-
-| 来源 | 用什么 |
+| 文档 | 内容 |
 |---|---|
-| [knapcio v2.2](https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4) | `start-tp4.sh` / `boot.py` / `.env.tp4.example` / `Dockerfile.canary-roce` / RoCEnante / v2.2 开关 |
-| [MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks) | knapcio 的上游启动器族；Mia 已收 knapcio TP4 线。本机「融合」= 跟 knapcio v2.2，不另拼 Mia TP3 切块 |
-| 本仓库 | 拓扑、护栏、哨兵、`.env` 覆盖项、三处缺陷修复、验收与踩坑 |
+| [docs/01-hardware-topology.md](docs/01-hardware-topology.md) | 8 台 GB10、RoCE 网络与地址规划模板 |
+| [docs/02-host-preparation.md](docs/02-host-preparation.md) | 宿主准备：内存哨兵、CPU 深睡眠态、GPU 锁频 |
+| [docs/03-image-and-model.md](docs/03-image-and-model.md) | 镜像构成与模型权重 |
+| [docs/04-env-and-parameters.md](docs/04-env-and-parameters.md) | 引擎环境底版与 15 个启动开关详解 |
+| [docs/05-boot-pipeline.md](docs/05-boot-pipeline.md) | 固定起服链 `tp8_up.sh` 九步与单编排者协议 |
+| [docs/06-verification.md](docs/06-verification.md) | 起服后检查：ARMED、暖机、健康、压测档 |
+| [docs/07-operations.md](docs/07-operations.md) | 运维：日志、回退、事故预案（含实录两则） |
 
-v2.2 生产行（knapcio CHANGELOG，B，作者 09-25 自测）：`DSV41_L2_PREFETCH_WOA=1`、`DSV41_SPEC_SYNC_FREE=all`、`DSV41_EAGER_GLUE=all`、`DSV41_SPLIT_COMPACT_GATHER=1`。不要为「再快一点」自行加大 `MAX_TOTAL_TOKENS` 到上游默认 800 万，除非你量过四台空闲余量。
+脚本：`scripts/`（起服链、后检查、独占/密管工具、内存哨兵）。
 
----
+## 三条铁律（细节在分册，先立此照）
 
-## 0 到 1（按这个顺序）
+1. **TP 必须八台同起同停**。任何对单台宿主的重启 / grub 修改都会带倒整个集群（TP 集合通信对端全断）。绝不轮询 wedge 节点、绝不单台起服。
+2. **宿主重启后有三件运行时状态不会自己回来**：内存哨兵、CPU 深睡眠态关闭、（DGX 侧的）钟锁——固定起服链的第 3、4、5 步专门补这三件，缺一不起服。
+3. **sudo 密码只走 stdin、密钥只进密管**。任何部署脚本不得把凭据放进 argv、环境文件或仓库。
 
-```text
-拓扑与免密 → 内核护栏 + 哨兵 → 权重四台本地齐 → 浅克隆 knapcio（LF）
-→ 写 .env.tp4 → 装本仓库补丁 → 四台 build → serve → 验收
-```
+## LICENSE / NOTICE
 
-| 步 | 文档 |
-|---|---|
-| 1 拓扑、RoCE 口不要对错 | [`docs/01-hardware-topology.md`](docs/01-hardware-topology.md) |
-| 2 护栏 + 哨兵 | [`docs/02-host-preparation.md`](docs/02-host-preparation.md)、[`docs/07-memory-safety.md`](docs/07-memory-safety.md) |
-| 3 权重 / Engram 目录 | [`docs/03-model-preparation.md`](docs/03-model-preparation.md) |
-| 4 上游 + 本机修复 | [`docs/04-upstream-and-fixes.md`](docs/04-upstream-and-fixes.md) |
-| 5 起服前清单 | [`docs/05-preflight.md`](docs/05-preflight.md) |
-| 6 每个旋钮为什么这样 | [`docs/06-launch-parameters.md`](docs/06-launch-parameters.md) |
-| 7 验收 | [`docs/08-verification.md`](docs/08-verification.md) |
-| 8 回滚 | [`docs/09-rollback.md`](docs/09-rollback.md) |
-| 9 踩坑 | [`docs/10-troubleshooting.md`](docs/10-troubleshooting.md) |
-| 10 怎么报数字 | [`docs/11-measurement-notes.md`](docs/11-measurement-notes.md) |
-| 11 运行时现象 | [`docs/12-engine-runtime-notes.md`](docs/12-engine-runtime-notes.md) |
-| 12 客户端窗（DSH 示例） | [`docs/13-client-window.md`](docs/13-client-window.md) |
-
-最短命令链（head 上，路径按你的改）：
-
-```bash
-# 0. 护栏已写入 /etc/sysctl.d/ ；哨兵
-sudo sysctl vm.min_free_kbytes vm.watermark_scale_factor
-# 期望 1048576 与 200
-/home/cq/v41-mg-phase.sh start
-
-# 1. 克隆（必须 LF；Windows 工作机不要 core.autocrlf=true）
-git -c core.autocrlf=false clone https://github.com/knapcio/DeepSeek-V4.1-Flash-4x-DGX-Spark-TP4.git /home/cq/dsv41-4x-spark
-cd /home/cq/dsv41-4x-spark
-git checkout e9ec61d2   # 钉死本手册验证过的提交
-
-# 2. 环境：从上游模板拷，再叠本仓库 env/tp4.overlay.env.example
-cp .env.tp4.example .env.tp4
-# 编辑站点 IP / 权重路径 / SSH / 网卡名，再写入 overlay 里的键
-
-# 3. 本机修复（幂等）
-bash /path/to/this-repo/scripts/apply-suwen-fixes.sh /path/to/this-repo/scripts/suwen_fixes.py /home/cq/dsv41-4x-spark
-
-# 4. 四台各 build 一次，再 serve
-./start-tp4.sh build
-./start-tp4.sh serve
-```
-
-`runtime/sglang-canary` 若浅克隆没有树：从你已有的同提交 canary 目录拷进去，或按 knapcio README 补全后再 `build`。缺源时 `Dockerfile.canary-roce` 的 `COPY runtime/sglang-canary/python` 会失败。
-
----
-
-## 本机补的三处上游缺陷
-
-1. **`--prefill-decode-interval 1`**：长冷 prefill 时别的路 decode 不再饿数分钟（09-28 实测空档曾到 601 s；打开后直连最长间隔 **1.77 s**）。
-2. **切块串行**（`suwen_fixes.py`）：已有切块请求在飞时，第二条「也会被切块」的请求退回等待，避免 `assert self.chunked_req is None` 四台一起退（09-26 Exit 247）。
-3. **SSE keepalive**：首 token 前先发 `: keepalive` 注释，避免部分 HTTP 客户端（含 Node undici）**300 s 无字节断流**。
-
-单测（纯 CPU）：`python scripts/test_suwen_fixes.py`（11 例）。
-
----
-
-## 4 路打满窗（DSH，2026-09-29，A）
-
-官方 DeepSeek Harness 桌面，窗 500000，4 场同时往上堆到自动压缩再续跑。39 回合，0 次超时 / 0 次容器重启 / 引擎 0 条 traceback。冷 prefill 10 次（约 19–34 万 token），首字 43–128 s；同期其它路仍出字 14.8–20 tok/s。四台最低 `MemAvailable` 9697–11094 MB，哨兵未开火。细节见 [`docs/08-verification.md`](docs/08-verification.md)。
-
----
-
-## 硬纪律
-
-1. **单机先行**再上四台。
-2. **无哨兵不起服**。绝对下限 **1024 MB** 不得放宽。禁止再挂 `memguard.sh start … 5.0 60.0`。
-3. **算出装不下就不要起**。统一内存上 `docker --memory` 拦不住驱动代持页。
-4. **跨 boot 数字不可直比**。同 boot、丢冷样本、重复 3 次报中位（[`docs/11`](docs/11-measurement-notes.md)）。
-5. **改旋钮先证明接线**：`MEM_FRACTION_STATIC` 在 `MAX_TOTAL_TOKENS` 已钉死且低于比例上限时不决定池大小。
-
----
-
-## License
-
-本仓库文档与脚本：**MIT**（[`LICENSE`](LICENSE)）。  
-knapcio / Mia / SGLang 本体遵循**各自仓库许可**（SGLang 系多为 AGPL）。你构建的镜像会带上上游代码，分发镜像前先读上游 LICENSE。
-
-Tony 七补丁与 09-14 vLLM 脚本不再是现役路径。
+见 [LICENSE](LICENSE) 与 [NOTICE.md](NOTICE.md)。文档内容按原许可证发布；上游 knapcio 启动器与 SGLang 分别遵循其各自许可证。

@@ -13,8 +13,8 @@ set -uo pipefail
 NAME="${1:-vllm_dsv41}"
 DRY=0
 [ "${2:-}" = "--dry-run" ] && DRY=1
-NODES="10.100.24.4 10.100.24.3 10.100.24.1 10.100.24.2"
-HEAD=10.100.24.4
+NODES="10.99.0.4 10.99.0.3 10.99.0.1 10.99.0.2"
+HEAD=10.99.0.4
 LOCK=/tmp/v41-kill-all.lock
 
 exec 9>"$LOCK" || { echo "无法创建锁 $LOCK"; exit 1; }
@@ -36,7 +36,7 @@ for ip in $NODES; do
     if [ "$DRY" = 1 ]; then
       echo "  $ip (ssh) 将执行 docker kill+rm $NAME"
     else
-      if ssh -n -o BatchMode=yes -o ConnectTimeout=5 "cq@$ip" \
+      if ssh -n -o BatchMode=yes -o ConnectTimeout=5 "deploy@$ip" \
            "docker kill $NAME >/dev/null 2>&1 || true; sleep 1; docker rm -f $NAME >/dev/null 2>&1 || true; echo ok" 2>/dev/null | grep -q ok; then
         echo "  $ip 已清"
       else

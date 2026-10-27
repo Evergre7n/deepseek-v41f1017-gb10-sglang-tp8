@@ -1,54 +1,52 @@
-# 02 · 宿主准备
+# 02 · 宿主准备（三件运行时状态 + 一件开机自启）
 
-**这篇讲什么**：四台都要做齐的内核护栏、Docker、SSH、哨兵。缺一项不要 `serve`。
+宿主重启会丢三件运行时状态；固定起服链（[05-boot-pipeline.md](05-boot-pipeline.md)）每轮起服前自动补，但首次部署要手动做一遍并理解每件的作用。
 
----
+## 1. 内存哨兵（绝对下限 1024 MB）
 
-## 1. 内核护栏（每台，root）
+GB10 是 CPU/GPU 一致性内存，推理引擎把宿主可用内存吃穿时会 wedge 整机（只能硬复位）。哨兵两个进程：
 
-写入 `/etc/sysctl.d/99-dsv41-guard.conf` 后 `sysctl --system`：
+- `sentinel_keeper.sh`：保证 watcher 常驻；
+- `v41-mg-load.sh __watch dsv41-tp8`：盯容器内存水位，低于绝对下限先杀容器保宿主（**丢会话好过丢机器**）。
+
+安装/恢复：head 的工具目录里有 `fix_sentinel_host.sh`（内部封装 [scripts/memguard/](../scripts/memguard/) 的 keeper/watcher），每台跑一次；验证标准：
 
 ```
-vm.min_free_kbytes = 1048576
-vm.watermark_scale_factor = 200
+keeper=$(pgrep -f "[s]entinel_keeper.sh" | wc -l)   # 必须 =1
+watcher=$(pgrep -f "[v]41-mg-load.sh __watch dsv41-tp8" | wc -l)  # 必须 =1
 ```
 
-核对：
+**任何一台挂不上哨兵就不允许起服**（起服链会硬性拦截）。宿主重启后 keeper/watcher 归零，必须重挂。
+
+## 2. CPU 深睡眠态关闭
+
+C-state 深睡眠（state2/state3）进出延迟会拖累集合通信与调度抖动，八台全部关闭（需要 root）：
 
 ```bash
-sysctl vm.min_free_kbytes vm.watermark_scale_factor
+for f in /sys/devices/system/cpu/cpu*/cpuidle/state2/disable \
+         /sys/devices/system/cpu/cpu*/cpuidle/state3/disable; do echo 1 > $f; done
 ```
 
-默认 `min_free` 只有约 44 MiB，是 wedge 主因之一。
+验证：`cat /sys/devices/system/cpu/cpu0/cpuidle/state3/disable` 必须 `1`。运行时状态，**宿主重启后复原**。
 
-## 2. Docker 与用户
+## 3. GPU 锁频 2200 MHz（`gb10-clock-cap.service`）
 
-- 每台已装 Docker，推理用户（示例 `cq`）在 `docker` 组。
-- 四台都能 `docker image ls` 看到同一套基础镜像或准备 pull `lmsysorg/sglang:dev-dsv41`。
-- **大文件不要走家庭套餐代理**（单次合计 >5 GB）。权重与基础镜像走局域网或直连。
+八台装一个开机自启的小服务，把 SM 时钟钉在 2200 MHz。收益是**稳定性与延迟方差**（高波动的瞬时提频会让 TP 集合通信互相等）；代价约 2–3% prefill 吞吐。是否锁频可自选，但**八台必须一致**——部分锁频会让快的那几台在 all-reduce 上空等。
 
-## 3. SSH
+- 超聚变机器：systemd 服务 `gb10-clock-cap`，`systemctl enable --now`；
+- DGX Spark：同样以服务方式落锁（开机自启），重启后自动恢复。
 
-- 工作机 → 四台：NVIDIA Sync 的 `spark-01`…`spark-04`。
-- 节点之间：`ssh -o BatchMode=yes 10.100.24.x`，免密。
-- knapcio `start-tp4.sh` 会从 head ssh 到 worker 起容器。
+验证：`systemctl is-active gb10-clock-cap` 八台全部 `active`；`nvidia-smi --query-gpu=clocks.sm --format=csv,noheader` 满载时稳定在 2184–2190 MHz。
 
-脚本与 `.env` **必须是 LF**。从 Windows 克隆时：`git -c core.autocrlf=false clone`。
+## 4. Docker 与镜像
 
-## 4. 哨兵
+每台本地各自构建/导入镜像（**不要**起一个共享 registry——起服时八台并发拉取会被 registry 限速卡死）。验证：`docker images -q <image> | wc -l` = 1。
 
-见 [`scripts/memguard/README.md`](../scripts/memguard/README.md)。起服前：
+## 5. 首次部署核对清单
 
-```bash
-/home/cq/v41-mg-phase.sh start
-```
-
-`ps` 里应有 `v41-mg-load.sh` / `memguard.sh` 在盯容器名。
-
-## 5. 独占
-
-同一批节点不要两个编排者同时 `docker rm` / 改相位。起服前看有没有别人的 boot / bench，写 claim，结束释放。
-
-## 6. 时钟（可选，本机现状）
-
-本机四台 GPU 锁 **300–2200 MHz**（`nvidia-smi -lgc`）。未评估过你的散热前不要照抄。
+- [ ] 八台 SSH 互信（head→各台 RoCE IP，`BatchMode=yes` 可达）
+- [ ] 各台 `/proc/uptime` 正常、时间同步
+- [ ] 哨兵 keeper/watcher 各 1（八台）
+- [ ] 深睡眠态 state3.disable 全 1（八台）
+- [ ] `gb10-clock-cap` 八台 active
+- [ ] 镜像八台各自在位
